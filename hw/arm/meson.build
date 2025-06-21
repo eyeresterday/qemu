@@ -72,4 +72,7 @@ system_ss.add(when: 'CONFIG_SX1', if_true: files('omap_sx1.c'))
 system_ss.add(when: 'CONFIG_VERSATILE', if_true: files('versatilepb.c'))
 system_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
 
+system_ss.add(when: 'CONFIG_S32K358_SOC', if_true: files('s32k358_soc.c'))
+system_ss.add(when: 'CONFIG_S32K3X8EVB', if_true: files('s32k3x8evb.c'))
+
 hw_arch += {'arm': arm_ss}
