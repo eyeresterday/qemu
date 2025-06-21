@@ -9,7 +9,7 @@
 #include "hw/qdev-clock.h"
 #include "hw/misc/unimp.h"
 //#include "sysemu/sysemu.h"
-#include "exec/address-spaces.h"
+#include "system/address-spaces.h"
 #include "qemu/units.h"
 
 #define FOREACH(iterator, array) for(typeof(&array[0]) iterator = array; iterator < array + sizeof(array)/sizeof(array[0]); iterator++)
@@ -416,7 +416,7 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
     }
 }
 
-static void s32k358_soc_class_init(ObjectClass *class, void *data)
+static void s32k358_soc_class_init(ObjectClass *class, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(class);
 
