@@ -10,8 +10,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import os
-import stat
-from subprocess import check_call, DEVNULL
 
 from qemu_test import QemuSystemTest
 from qemu_test import exec_command_and_wait_for_pattern
@@ -23,17 +21,6 @@ class TuxRunBaselineTest(QemuSystemTest):
     KERNEL_COMMON_COMMAND_LINE = 'printk.time=0'
     # Tests are ~10-40s, allow for --debug/--enable-gcov overhead
     timeout = 100
-
-    def get_tag(self, tagname, default=None):
-        """
-        Get the metadata tag or return the default.
-        """
-        utag = self._get_unique_tag_val(tagname)
-        print(f"{tagname}/{default} -> {utag}")
-        if utag:
-            return utag
-
-        return default
 
     def setUp(self):
         super().setUp()
@@ -73,17 +60,7 @@ class TuxRunBaselineTest(QemuSystemTest):
         Fetch the TuxBoot assets.
         """
         kernel_image =  kernel_asset.fetch()
-        disk_image_zst = rootfs_asset.fetch()
-
-        disk_image = self.scratch_file("rootfs.ext4")
-
-        check_call(['zstd', "-f", "-d", disk_image_zst,
-                    "-o", disk_image],
-                   stdout=DEVNULL, stderr=DEVNULL)
-        # zstd copies source archive permissions for the output
-        # file, so must make this writable for QEMU
-        os.chmod(disk_image, stat.S_IRUSR | stat.S_IWUSR)
-
+        disk_image = self.uncompress(rootfs_asset)
         dtb = dtb_asset.fetch() if dtb_asset is not None else None
 
         return (kernel_image, disk_image, dtb)
@@ -98,12 +75,12 @@ class TuxRunBaselineTest(QemuSystemTest):
         blockdev = "driver=raw,file.driver=file," \
             + f"file.filename={disk},node-name=hd0"
 
-        kcmd_line = self.KERNEL_COMMON_COMMAND_LINE
-        kcmd_line += f" root=/dev/{self.root}"
-        kcmd_line += f" console={self.console}"
+        self.kcmd_line = self.KERNEL_COMMON_COMMAND_LINE
+        self.kcmd_line += f" root=/dev/{self.root}"
+        self.kcmd_line += f" console={self.console}"
 
         self.vm.add_args('-kernel', kernel,
-                         '-append', kcmd_line,
+                         '-append', self.kcmd_line,
                          '-blockdev', blockdev)
 
         # Sometimes we need extra devices attached
@@ -124,6 +101,7 @@ class TuxRunBaselineTest(QemuSystemTest):
         wait to exit cleanly.
         """
         ps1='root@tuxtest:~#'
+        self.wait_for_console_pattern(self.kcmd_line)
         self.wait_for_console_pattern('tuxtest login:')
         exec_command_and_wait_for_pattern(self, 'root', ps1)
         exec_command_and_wait_for_pattern(self, 'cat /proc/interrupts', ps1)

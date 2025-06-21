@@ -713,7 +713,7 @@ static void sifive_u_machine_instance_init(Object *obj)
     object_property_set_description(obj, "serial", "Board serial number");
 }
 
-static void sifive_u_machine_class_init(ObjectClass *oc, void *data)
+static void sifive_u_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -724,6 +724,7 @@ static void sifive_u_machine_class_init(ObjectClass *oc, void *data)
     mc->default_cpu_type = SIFIVE_U_CPU;
     mc->default_cpus = mc->min_cpus;
     mc->default_ram_id = "riscv.sifive.u.ram";
+    mc->auto_create_sdcard = true;
 
     object_class_property_add_bool(oc, "start-in-flash",
                                    sifive_u_machine_get_start_in_flash,
@@ -945,7 +946,7 @@ static const Property sifive_u_soc_props[] = {
     DEFINE_PROP_STRING("cpu-type", SiFiveUSoCState, cpu_type),
 };
 
-static void sifive_u_soc_class_init(ObjectClass *oc, void *data)
+static void sifive_u_soc_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 

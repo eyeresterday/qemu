@@ -157,7 +157,7 @@ static void aspeed_soc_ast2600_init(Object *obj)
     char socname[8];
     char typename[64];
 
-    if (sscanf(sc->name, "%7s", socname) != 1) {
+    if (sscanf(object_get_typename(obj), "%7s", socname) != 1) {
         g_assert_not_reached();
     }
 
@@ -653,7 +653,7 @@ static bool aspeed_soc_ast2600_boot_from_emmc(AspeedSoCState *s)
     return !!(hw_strap1 & SCU_AST2600_HW_STRAP_BOOT_SRC_EMMC);
 }
 
-static void aspeed_soc_ast2600_class_init(ObjectClass *oc, void *data)
+static void aspeed_soc_ast2600_class_init(ObjectClass *oc, const void *data)
 {
     static const char * const valid_cpu_types[] = {
         ARM_CPU_TYPE_NAME("cortex-a7"),
@@ -666,7 +666,6 @@ static void aspeed_soc_ast2600_class_init(ObjectClass *oc, void *data)
     /* Reason: The Aspeed SoC can only be instantiated from a board */
     dc->user_creatable = false;
 
-    sc->name         = "ast2600-a3";
     sc->valid_cpu_types = valid_cpu_types;
     sc->silicon_rev  = AST2600_A3_SILICON_REV;
     sc->sram_size    = 0x16400;

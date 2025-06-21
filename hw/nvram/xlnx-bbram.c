@@ -502,7 +502,7 @@ static void bbram_prop_release_drive(Object *obj, const char *name,
 }
 
 static const PropertyInfo bbram_prop_drive = {
-    .name  = "str",
+    .type  = "str",
     .description = "Node name or ID of a block device to use as BBRAM backend",
     .realized_set_allowed = true,
     .get = bbram_prop_get_drive,
@@ -525,7 +525,7 @@ static const Property bbram_ctrl_props[] = {
     DEFINE_PROP_UINT32("crc-zpads", XlnxBBRam, crc_zpads, 1),
 };
 
-static void bbram_ctrl_class_init(ObjectClass *klass, void *data)
+static void bbram_ctrl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);

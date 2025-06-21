@@ -1,7 +1,9 @@
 /*
  * QEMU PowerPC PowerNV machine model
  *
- * Copyright (c) 2016, IBM Corporation.
+ * Copyright (c) 2016-2024, IBM Corporation.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -63,6 +65,8 @@
 #define FW_FILE_NAME            "skiboot.lid"
 #define FW_LOAD_ADDR            0x0
 #define FW_MAX_SIZE             (16 * MiB)
+
+#define PNOR_FILE_NAME          "pnv-pnor.bin"
 
 #define KERNEL_LOAD_ADDR        0x20000000
 #define KERNEL_MAX_SIZE         (128 * MiB)
@@ -744,7 +748,6 @@ static void pnv_reset(MachineState *machine, ResetType type)
         _FDT((fdt_pack(fdt)));
     }
 
-    qemu_fdt_dumpdtb(fdt, fdt_totalsize(fdt));
     cpu_physical_memory_write(PNV_FDT_ADDR, fdt, fdt_totalsize(fdt));
 
     /* Update machine->fdt with latest fdt */
@@ -942,7 +945,7 @@ static void pnv_init(MachineState *machine)
     uint64_t chip_ram_start = 0;
     int i;
     char *chip_typename;
-    DriveInfo *pnor = drive_get(IF_MTD, 0, 0);
+    DriveInfo *pnor;
     DeviceState *dev;
 
     if (kvm_enabled()) {
@@ -972,6 +975,18 @@ static void pnv_init(MachineState *machine)
      * Create our simple PNOR device
      */
     dev = qdev_new(TYPE_PNV_PNOR);
+    pnor = drive_get(IF_MTD, 0, 0);
+    if (!pnor && defaults_enabled()) {
+        fw_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, PNOR_FILE_NAME);
+        if (!fw_filename) {
+            warn_report("Could not find PNOR '%s'", PNOR_FILE_NAME);
+        } else {
+            QemuOpts *opts;
+            opts = drive_add(IF_MTD, -1, fw_filename, "format=raw,readonly=on");
+            pnor = drive_new(opts, IF_MTD, &error_fatal);
+            g_free(fw_filename);
+        }
+    }
     if (pnor) {
         qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(pnor));
     }
@@ -1176,7 +1191,7 @@ static void pnv_init(MachineState *machine)
      * Since we can not reach the remote BMC machine with LPC memops,
      * map it always for now.
      */
-    memory_region_add_subregion(pnv->chips[0]->fw_mr, PNOR_SPI_OFFSET,
+    memory_region_add_subregion(pnv->chips[0]->fw_mr, pnv->pnor->lpc_address,
                                 &pnv->pnor->mmio);
 
     /*
@@ -1556,7 +1571,21 @@ static void pnv_chip_power8_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    /* HOMER (must be created before OCC) */
+    object_property_set_link(OBJECT(&chip8->homer), "chip", OBJECT(chip),
+                             &error_abort);
+    if (!qdev_realize(DEVICE(&chip8->homer), NULL, errp)) {
+        return;
+    }
+    /* Homer Xscom region */
+    pnv_xscom_add_subregion(chip, PNV_XSCOM_PBA_BASE, &chip8->homer.pba_regs);
+    /* Homer RAM region */
+    memory_region_add_subregion(get_system_memory(), chip8->homer.base,
+                                &chip8->homer.mem);
+
     /* Create the simplified OCC model */
+    object_property_set_link(OBJECT(&chip8->occ), "homer",
+                             OBJECT(&chip8->homer), &error_abort);
     if (!qdev_realize(DEVICE(&chip8->occ), NULL, errp)) {
         return;
     }
@@ -1567,19 +1596,6 @@ static void pnv_chip_power8_realize(DeviceState *dev, Error **errp)
     /* OCC SRAM model */
     memory_region_add_subregion(get_system_memory(), PNV_OCC_SENSOR_BASE(chip),
                                 &chip8->occ.sram_regs);
-
-    /* HOMER */
-    object_property_set_link(OBJECT(&chip8->homer), "chip", OBJECT(chip),
-                             &error_abort);
-    if (!qdev_realize(DEVICE(&chip8->homer), NULL, errp)) {
-        return;
-    }
-    /* Homer Xscom region */
-    pnv_xscom_add_subregion(chip, PNV_XSCOM_PBA_BASE, &chip8->homer.pba_regs);
-
-    /* Homer mmio region */
-    memory_region_add_subregion(get_system_memory(), PNV_HOMER_BASE(chip),
-                                &chip8->homer.regs);
 
     /* PHB controllers */
     for (i = 0; i < chip8->num_phbs; i++) {
@@ -1602,7 +1618,7 @@ static uint32_t pnv_chip_power8_xscom_pcba(PnvChip *chip, uint64_t addr)
     return ((addr >> 4) & ~0xfull) | ((addr >> 3) & 0xf);
 }
 
-static void pnv_chip_power8e_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_power8e_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PnvChipClass *k = PNV_CHIP_CLASS(klass);
@@ -1626,7 +1642,7 @@ static void pnv_chip_power8e_class_init(ObjectClass *klass, void *data)
                                     &k->parent_realize);
 }
 
-static void pnv_chip_power8_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_power8_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PnvChipClass *k = PNV_CHIP_CLASS(klass);
@@ -1650,7 +1666,7 @@ static void pnv_chip_power8_class_init(ObjectClass *klass, void *data)
                                     &k->parent_realize);
 }
 
-static void pnv_chip_power8nvl_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_power8nvl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PnvChipClass *k = PNV_CHIP_CLASS(klass);
@@ -1754,6 +1770,7 @@ static void pnv_chip_power9_pec_realize(PnvChip *chip, Error **errp)
     for (i = 0; i < chip->num_pecs; i++) {
         PnvPhb4PecState *pec = &chip9->pecs[i];
         PnvPhb4PecClass *pecc = PNV_PHB4_PEC_GET_CLASS(pec);
+        uint32_t pec_cplt_base;
         uint32_t pec_nest_base;
         uint32_t pec_pci_base;
 
@@ -1766,9 +1783,12 @@ static void pnv_chip_power9_pec_realize(PnvChip *chip, Error **errp)
             return;
         }
 
+        pec_cplt_base = pecc->xscom_cplt_base(pec);
         pec_nest_base = pecc->xscom_nest_base(pec);
         pec_pci_base = pecc->xscom_pci_base(pec);
 
+        pnv_xscom_add_subregion(chip, pec_cplt_base,
+                 &pec->nest_pervasive.xscom_ctrl_regs_mr);
         pnv_xscom_add_subregion(chip, pec_nest_base, &pec->nest_regs_mr);
         pnv_xscom_add_subregion(chip, pec_pci_base, &pec->pci_regs_mr);
     }
@@ -1860,18 +1880,6 @@ static void pnv_chip_power9_realize(DeviceState *dev, Error **errp)
     pnv_xscom_add_subregion(chip, PNV9_XSCOM_CHIPTOD_BASE,
                             &chip9->chiptod.xscom_regs);
 
-    /* Create the simplified OCC model */
-    if (!qdev_realize(DEVICE(&chip9->occ), NULL, errp)) {
-        return;
-    }
-    pnv_xscom_add_subregion(chip, PNV9_XSCOM_OCC_BASE, &chip9->occ.xscom_regs);
-    qdev_connect_gpio_out(DEVICE(&chip9->occ), 0, qdev_get_gpio_in(
-                              DEVICE(psi9), PSIHB9_IRQ_OCC));
-
-    /* OCC SRAM model */
-    memory_region_add_subregion(get_system_memory(), PNV9_OCC_SENSOR_BASE(chip),
-                                &chip9->occ.sram_regs);
-
     /* SBE */
     if (!qdev_realize(DEVICE(&chip9->sbe), NULL, errp)) {
         return;
@@ -1883,7 +1891,7 @@ static void pnv_chip_power9_realize(DeviceState *dev, Error **errp)
     qdev_connect_gpio_out(DEVICE(&chip9->sbe), 0, qdev_get_gpio_in(
                               DEVICE(psi9), PSIHB9_IRQ_PSU));
 
-    /* HOMER */
+    /* HOMER (must be created before OCC) */
     object_property_set_link(OBJECT(&chip9->homer), "chip", OBJECT(chip),
                              &error_abort);
     if (!qdev_realize(DEVICE(&chip9->homer), NULL, errp)) {
@@ -1891,10 +1899,23 @@ static void pnv_chip_power9_realize(DeviceState *dev, Error **errp)
     }
     /* Homer Xscom region */
     pnv_xscom_add_subregion(chip, PNV9_XSCOM_PBA_BASE, &chip9->homer.pba_regs);
+    /* Homer RAM region */
+    memory_region_add_subregion(get_system_memory(), chip9->homer.base,
+                                &chip9->homer.mem);
 
-    /* Homer mmio region */
-    memory_region_add_subregion(get_system_memory(), PNV9_HOMER_BASE(chip),
-                                &chip9->homer.regs);
+    /* Create the simplified OCC model */
+    object_property_set_link(OBJECT(&chip9->occ), "homer",
+                             OBJECT(&chip9->homer), &error_abort);
+    if (!qdev_realize(DEVICE(&chip9->occ), NULL, errp)) {
+        return;
+    }
+    pnv_xscom_add_subregion(chip, PNV9_XSCOM_OCC_BASE, &chip9->occ.xscom_regs);
+    qdev_connect_gpio_out(DEVICE(&chip9->occ), 0, qdev_get_gpio_in(
+                              DEVICE(psi9), PSIHB9_IRQ_OCC));
+
+    /* OCC SRAM model */
+    memory_region_add_subregion(get_system_memory(), PNV9_OCC_SENSOR_BASE(chip),
+                                &chip9->occ.sram_regs);
 
     /* PEC PHBs */
     pnv_chip_power9_pec_realize(chip, &local_err);
@@ -1933,7 +1954,7 @@ static uint32_t pnv_chip_power9_xscom_pcba(PnvChip *chip, uint64_t addr)
     return addr >> 3;
 }
 
-static void pnv_chip_power9_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_power9_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PnvChipClass *k = PNV_CHIP_CLASS(klass);
@@ -2028,6 +2049,7 @@ static void pnv_chip_power10_phb_realize(PnvChip *chip, Error **errp)
     for (i = 0; i < chip->num_pecs; i++) {
         PnvPhb4PecState *pec = &chip10->pecs[i];
         PnvPhb4PecClass *pecc = PNV_PHB4_PEC_GET_CLASS(pec);
+        uint32_t pec_cplt_base;
         uint32_t pec_nest_base;
         uint32_t pec_pci_base;
 
@@ -2040,9 +2062,12 @@ static void pnv_chip_power10_phb_realize(PnvChip *chip, Error **errp)
             return;
         }
 
+        pec_cplt_base = pecc->xscom_cplt_base(pec);
         pec_nest_base = pecc->xscom_nest_base(pec);
         pec_pci_base = pecc->xscom_pci_base(pec);
 
+        pnv_xscom_add_subregion(chip, pec_cplt_base,
+                 &pec->nest_pervasive.xscom_ctrl_regs_mr);
         pnv_xscom_add_subregion(chip, pec_nest_base, &pec->nest_regs_mr);
         pnv_xscom_add_subregion(chip, pec_pci_base, &pec->pci_regs_mr);
     }
@@ -2137,7 +2162,22 @@ static void pnv_chip_power10_realize(DeviceState *dev, Error **errp)
     pnv_xscom_add_subregion(chip, PNV10_XSCOM_CHIPTOD_BASE,
                             &chip10->chiptod.xscom_regs);
 
+    /* HOMER (must be created before OCC) */
+    object_property_set_link(OBJECT(&chip10->homer), "chip", OBJECT(chip),
+                             &error_abort);
+    if (!qdev_realize(DEVICE(&chip10->homer), NULL, errp)) {
+        return;
+    }
+    /* Homer Xscom region */
+    pnv_xscom_add_subregion(chip, PNV10_XSCOM_PBA_BASE,
+                            &chip10->homer.pba_regs);
+    /* Homer RAM region */
+    memory_region_add_subregion(get_system_memory(), chip10->homer.base,
+                                &chip10->homer.mem);
+
     /* Create the simplified OCC model */
+    object_property_set_link(OBJECT(&chip10->occ), "homer",
+                             OBJECT(&chip10->homer), &error_abort);
     if (!qdev_realize(DEVICE(&chip10->occ), NULL, errp)) {
         return;
     }
@@ -2161,20 +2201,6 @@ static void pnv_chip_power10_realize(DeviceState *dev, Error **errp)
                             &chip10->sbe.xscom_mbox_regs);
     qdev_connect_gpio_out(DEVICE(&chip10->sbe), 0, qdev_get_gpio_in(
                               DEVICE(&chip10->psi), PSIHB9_IRQ_PSU));
-
-    /* HOMER */
-    object_property_set_link(OBJECT(&chip10->homer), "chip", OBJECT(chip),
-                             &error_abort);
-    if (!qdev_realize(DEVICE(&chip10->homer), NULL, errp)) {
-        return;
-    }
-    /* Homer Xscom region */
-    pnv_xscom_add_subregion(chip, PNV10_XSCOM_PBA_BASE,
-                            &chip10->homer.pba_regs);
-
-    /* Homer mmio region */
-    memory_region_add_subregion(get_system_memory(), PNV10_HOMER_BASE(chip),
-                                &chip10->homer.regs);
 
     /* N1 chiplet */
     if (!qdev_realize(DEVICE(&chip10->n1_chiplet), NULL, errp)) {
@@ -2226,6 +2252,8 @@ static void pnv_chip_power10_realize(DeviceState *dev, Error **errp)
         /* pib_spic[2] connected to 25csm04 which implements 1 byte transfer */
         object_property_set_int(OBJECT(&chip10->pib_spic[i]), "transfer_len",
                                 (i == 2) ? 1 : 4, &error_fatal);
+        object_property_set_int(OBJECT(&chip10->pib_spic[i]), "chip-id",
+                                chip->chip_id, &error_fatal);
         if (!sysbus_realize(SYS_BUS_DEVICE(OBJECT
                                         (&chip10->pib_spic[i])), errp)) {
             return;
@@ -2274,7 +2302,7 @@ static uint32_t pnv_chip_power10_xscom_pcba(PnvChip *chip, uint64_t addr)
     return addr >> 3;
 }
 
-static void pnv_chip_power10_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_power10_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PnvChipClass *k = PNV_CHIP_CLASS(klass);
@@ -2433,7 +2461,7 @@ static const Property pnv_chip_properties[] = {
     DEFINE_PROP_BOOL("lpar-per-core", PnvChip, lpar_per_core, false),
 };
 
-static void pnv_chip_class_init(ObjectClass *klass, void *data)
+static void pnv_chip_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
@@ -2582,7 +2610,7 @@ static void pnv_pic_print_info(InterruptStatsProvider *obj, GString *buf)
 
 static int pnv_match_nvt(XiveFabric *xfb, uint8_t format,
                          uint8_t nvt_blk, uint32_t nvt_idx,
-                         bool cam_ignore, uint8_t priority,
+                         bool crowd, bool cam_ignore, uint8_t priority,
                          uint32_t logic_serv,
                          XiveTCTXMatch *match)
 {
@@ -2596,8 +2624,8 @@ static int pnv_match_nvt(XiveFabric *xfb, uint8_t format,
         XivePresenterClass *xpc = XIVE_PRESENTER_GET_CLASS(xptr);
         int count;
 
-        count = xpc->match_nvt(xptr, format, nvt_blk, nvt_idx, cam_ignore,
-                               priority, logic_serv, match);
+        count = xpc->match_nvt(xptr, format, nvt_blk, nvt_idx, crowd,
+                               cam_ignore, priority, logic_serv, match);
 
         if (count < 0) {
             return count;
@@ -2611,7 +2639,7 @@ static int pnv_match_nvt(XiveFabric *xfb, uint8_t format,
 
 static int pnv10_xive_match_nvt(XiveFabric *xfb, uint8_t format,
                                 uint8_t nvt_blk, uint32_t nvt_idx,
-                                bool cam_ignore, uint8_t priority,
+                                bool crowd, bool cam_ignore, uint8_t priority,
                                 uint32_t logic_serv,
                                 XiveTCTXMatch *match)
 {
@@ -2625,8 +2653,8 @@ static int pnv10_xive_match_nvt(XiveFabric *xfb, uint8_t format,
         XivePresenterClass *xpc = XIVE_PRESENTER_GET_CLASS(xptr);
         int count;
 
-        count = xpc->match_nvt(xptr, format, nvt_blk, nvt_idx, cam_ignore,
-                               priority, logic_serv, match);
+        count = xpc->match_nvt(xptr, format, nvt_blk, nvt_idx, crowd,
+                               cam_ignore, priority, logic_serv, match);
 
         if (count < 0) {
             return count;
@@ -2636,6 +2664,24 @@ static int pnv10_xive_match_nvt(XiveFabric *xfb, uint8_t format,
     }
 
     return total_count;
+}
+
+static int pnv10_xive_broadcast(XiveFabric *xfb,
+                                uint8_t nvt_blk, uint32_t nvt_idx,
+                                bool crowd, bool cam_ignore,
+                                uint8_t priority)
+{
+    PnvMachineState *pnv = PNV_MACHINE(xfb);
+    int i;
+
+    for (i = 0; i < pnv->num_chips; i++) {
+        Pnv10Chip *chip10 = PNV10_CHIP(pnv->chips[i]);
+        XivePresenter *xptr = XIVE_PRESENTER(&chip10->xive);
+        XivePresenterClass *xpc = XIVE_PRESENTER_GET_CLASS(xptr);
+
+        xpc->broadcast(xptr, nvt_blk, nvt_idx, crowd, cam_ignore, priority);
+    }
+    return 0;
 }
 
 static bool pnv_machine_get_big_core(Object *obj, Error **errp)
@@ -2678,7 +2724,7 @@ static void pnv_machine_set_hb(Object *obj, bool value, Error **errp)
     }
 }
 
-static void pnv_machine_power8_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_power8_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     XICSFabricClass *xic = XICS_FABRIC_CLASS(oc);
@@ -2707,7 +2753,7 @@ static void pnv_machine_power8_class_init(ObjectClass *oc, void *data)
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_PNV_PHB);
 }
 
-static void pnv_machine_power9_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_power9_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     XiveFabricClass *xfc = XIVE_FABRIC_CLASS(oc);
@@ -2746,7 +2792,7 @@ static void pnv_machine_power9_class_init(ObjectClass *oc, void *data)
                               "Use 1 LPAR per core mode");
 }
 
-static void pnv_machine_p10_common_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_p10_common_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     PnvMachineClass *pmc = PNV_MACHINE_CLASS(oc);
@@ -2771,11 +2817,12 @@ static void pnv_machine_p10_common_class_init(ObjectClass *oc, void *data)
     pmc->dt_power_mgt = pnv_dt_power_mgt;
 
     xfc->match_nvt = pnv10_xive_match_nvt;
+    xfc->broadcast = pnv10_xive_broadcast;
 
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_PNV_PHB);
 }
 
-static void pnv_machine_power10_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_power10_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -2800,7 +2847,8 @@ static void pnv_machine_power10_class_init(ObjectClass *oc, void *data)
                               "Use 1 LPAR per core mode");
 }
 
-static void pnv_machine_p10_rainier_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_p10_rainier_class_init(ObjectClass *oc,
+                                               const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     PnvMachineClass *pmc = PNV_MACHINE_CLASS(oc);
@@ -2865,7 +2913,7 @@ static void pnv_nmi(NMIState *n, int cpu_index, Error **errp)
     }
 }
 
-static void pnv_machine_class_init(ObjectClass *oc, void *data)
+static void pnv_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     InterruptStatsProviderClass *ispc = INTERRUPT_STATS_PROVIDER_CLASS(oc);
@@ -2925,7 +2973,7 @@ static const TypeInfo types[] = {
         .name          = MACHINE_TYPE_NAME("powernv10"),
         .parent        = TYPE_PNV_MACHINE,
         .class_init    = pnv_machine_power10_class_init,
-        .interfaces = (InterfaceInfo[]) {
+        .interfaces = (const InterfaceInfo[]) {
             { TYPE_XIVE_FABRIC },
             { },
         },
@@ -2934,7 +2982,7 @@ static const TypeInfo types[] = {
         .name          = MACHINE_TYPE_NAME("powernv9"),
         .parent        = TYPE_PNV_MACHINE,
         .class_init    = pnv_machine_power9_class_init,
-        .interfaces = (InterfaceInfo[]) {
+        .interfaces = (const InterfaceInfo[]) {
             { TYPE_XIVE_FABRIC },
             { },
         },
@@ -2943,7 +2991,7 @@ static const TypeInfo types[] = {
         .name          = MACHINE_TYPE_NAME("powernv8"),
         .parent        = TYPE_PNV_MACHINE,
         .class_init    = pnv_machine_power8_class_init,
-        .interfaces = (InterfaceInfo[]) {
+        .interfaces = (const InterfaceInfo[]) {
             { TYPE_XICS_FABRIC },
             { },
         },
@@ -2955,7 +3003,7 @@ static const TypeInfo types[] = {
         .instance_size = sizeof(PnvMachineState),
         .class_init    = pnv_machine_class_init,
         .class_size    = sizeof(PnvMachineClass),
-        .interfaces = (InterfaceInfo[]) {
+        .interfaces = (const InterfaceInfo[]) {
             { TYPE_INTERRUPT_STATS_PROVIDER },
             { TYPE_NMI },
             { },

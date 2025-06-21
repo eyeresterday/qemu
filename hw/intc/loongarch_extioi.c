@@ -11,10 +11,27 @@
 #include "qapi/error.h"
 #include "hw/irq.h"
 #include "hw/loongarch/virt.h"
-#include "exec/address-spaces.h"
+#include "system/address-spaces.h"
 #include "hw/intc/loongarch_extioi.h"
 #include "trace.h"
 
+static int extioi_get_index_from_archid(LoongArchExtIOICommonState *s,
+                                        uint64_t arch_id)
+{
+    int i;
+
+    for (i = 0; i < s->num_cpu; i++) {
+        if (s->cpu[i].arch_id == arch_id) {
+            break;
+        }
+    }
+
+    if ((i < s->num_cpu) && s->cpu[i].cpu) {
+        return i;
+    }
+
+    return -1;
+}
 
 static void extioi_update_irq(LoongArchExtIOICommonState *s, int irq, int level)
 {
@@ -125,7 +142,7 @@ static inline void extioi_enable_irq(LoongArchExtIOICommonState *s, int index,\
 static inline void extioi_update_sw_coremap(LoongArchExtIOICommonState *s,
                                             int irq, uint64_t val, bool notify)
 {
-    int i, cpu;
+    int i, cpu, cpuid;
 
     /*
      * loongarch only support little endian,
@@ -134,12 +151,17 @@ static inline void extioi_update_sw_coremap(LoongArchExtIOICommonState *s,
     val = cpu_to_le64(val);
 
     for (i = 0; i < 4; i++) {
-        cpu = val & 0xff;
+        cpuid = val & 0xff;
         val = val >> 8;
 
         if (!(s->status & BIT(EXTIOI_ENABLE_CPU_ENCODE))) {
-            cpu = ctz32(cpu);
-            cpu = (cpu >= 4) ? 0 : cpu;
+            cpuid = ctz32(cpuid);
+            cpuid = (cpuid >= 4) ? 0 : cpuid;
+        }
+
+        cpu = extioi_get_index_from_archid(s, cpuid);
+        if (cpu < 0) {
+            continue;
         }
 
         if (s->sw_coremap[irq + i] == cpu) {
@@ -321,7 +343,7 @@ static void loongarch_extioi_realize(DeviceState *dev, Error **errp)
     LoongArchExtIOIClass *lec = LOONGARCH_EXTIOI_GET_CLASS(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
     Error *local_err = NULL;
-    int i, pin;
+    int i;
 
     lec->parent_realize(dev, &local_err);
     if (local_err) {
@@ -346,18 +368,6 @@ static void loongarch_extioi_realize(DeviceState *dev, Error **errp)
     } else {
         s->status |= BIT(EXTIOI_ENABLE);
     }
-
-    s->cpu = g_new0(ExtIOICore, s->num_cpu);
-    if (s->cpu == NULL) {
-        error_setg(errp, "Memory allocation for ExtIOICore faile");
-        return;
-    }
-
-    for (i = 0; i < s->num_cpu; i++) {
-        for (pin = 0; pin < LS3A_INTC_IP; pin++) {
-            qdev_init_gpio_out(dev, &s->cpu[i].parent_irq[pin], 1);
-        }
-    }
 }
 
 static void loongarch_extioi_unrealize(DeviceState *dev)
@@ -367,11 +377,13 @@ static void loongarch_extioi_unrealize(DeviceState *dev)
     g_free(s->cpu);
 }
 
-static void loongarch_extioi_reset(DeviceState *d)
+static void loongarch_extioi_reset_hold(Object *obj, ResetType type)
 {
-    LoongArchExtIOICommonState *s = LOONGARCH_EXTIOI_COMMON(d);
+    LoongArchExtIOIClass *lec = LOONGARCH_EXTIOI_GET_CLASS(obj);
 
-    s->status = 0;
+    if (lec->parent_phases.hold) {
+        lec->parent_phases.hold(obj, type);
+    }
 }
 
 static int vmstate_extioi_post_load(void *opaque, int version_id)
@@ -391,17 +403,19 @@ static int vmstate_extioi_post_load(void *opaque, int version_id)
     return 0;
 }
 
-static void loongarch_extioi_class_init(ObjectClass *klass, void *data)
+static void loongarch_extioi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     LoongArchExtIOIClass *lec = LOONGARCH_EXTIOI_CLASS(klass);
     LoongArchExtIOICommonClass *lecc = LOONGARCH_EXTIOI_COMMON_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     device_class_set_parent_realize(dc, loongarch_extioi_realize,
                                     &lec->parent_realize);
     device_class_set_parent_unrealize(dc, loongarch_extioi_unrealize,
                                       &lec->parent_unrealize);
-    device_class_set_legacy_reset(dc, loongarch_extioi_reset);
+    resettable_class_set_parent_phases(rc, NULL, loongarch_extioi_reset_hold,
+                                       NULL, &lec->parent_phases);
     lecc->post_load = vmstate_extioi_post_load;
 }
 

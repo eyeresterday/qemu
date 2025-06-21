@@ -11,6 +11,8 @@
 #ifndef HVF_INT_H
 #define HVF_INT_H
 
+#include "qemu/queue.h"
+
 #ifdef __aarch64__
 #include <Hypervisor/Hypervisor.h>
 typedef hv_vcpu_t hvf_vcpuid;
@@ -42,6 +44,7 @@ typedef struct hvf_vcpu_caps {
 
 struct HVFState {
     AccelState parent;
+
     hvf_slot slots[32];
     int num_slots;
 

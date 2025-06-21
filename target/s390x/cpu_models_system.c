@@ -18,8 +18,8 @@
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include "qapi/qobject-input-visitor.h"
-#include "qapi/qmp/qdict.h"
-#include "qapi/qapi-commands-machine-target.h"
+#include "qobject/qdict.h"
+#include "qapi/qapi-commands-machine.h"
 
 static void list_add_feat(const char *name, void *opaque);
 

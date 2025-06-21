@@ -1,9 +1,10 @@
 /*
  * Inter-VM Shared Memory Flat Device
  *
- * SPDX-FileCopyrightText: 2023 Linaro Ltd.
- * SPDX-FileContributor: Gustavo Romero <gustavo.romero@linaro.org>
  * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (c) 2023 Linaro Ltd.
+ * Authors:
+ *   Gustavo Romero
  *
  */
 
@@ -13,7 +14,7 @@
 #include "qemu/queue.h"
 #include "qemu/event_notifier.h"
 #include "chardev/char-fe.h"
-#include "exec/memory.h"
+#include "system/memory.h"
 #include "qom/object.h"
 #include "hw/sysbus.h"
 

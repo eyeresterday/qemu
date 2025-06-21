@@ -15,12 +15,17 @@
 #include "qapi/qapi-visit-sockets.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qlist.h"
+#include "qobject/qlist.h"
 #include "qemu/cutils.h"
 #include "qemu/memalign.h"
 
 #include "migration/bootfile.h"
 #include "migration/migration-util.h"
+
+#if defined(__linux__)
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
+#endif
 
 /* for uffd_version_check() */
 #if defined(__linux__) && defined(__NR_userfaultfd) && defined(CONFIG_EVENTFD)
@@ -31,7 +36,6 @@
 /* For dirty ring test; so far only x86_64 is supported */
 #if defined(__linux__) && defined(HOST_X86_64)
 #include "linux/kvm.h"
-#include <sys/ioctl.h>
 #endif
 
 
@@ -131,25 +135,32 @@ migrate_get_connect_qdict(QTestState *who)
 
 void migrate_set_ports(QTestState *to, QList *channel_list)
 {
-    QDict *addr;
+    g_autoptr(QDict) addr = NULL;
     QListEntry *entry;
     const char *addr_port = NULL;
-
-    addr = migrate_get_connect_qdict(to);
 
     QLIST_FOREACH_ENTRY(channel_list, entry) {
         QDict *channel = qobject_to(QDict, qlist_entry_obj(entry));
         QDict *addrdict = qdict_get_qdict(channel, "addr");
 
-        if (qdict_haskey(addrdict, "port") &&
-            qdict_haskey(addr, "port") &&
-            (strcmp(qdict_get_str(addrdict, "port"), "0") == 0)) {
+        if (!qdict_haskey(addrdict, "port") ||
+            strcmp(qdict_get_str(addrdict, "port"), "0")) {
+            continue;
+        }
+
+        /*
+         * Fetch addr only if needed, so tests that are not yet connected to
+         * the monitor do not query it.  Such tests cannot use port=0.
+         */
+        if (!addr) {
+            addr = migrate_get_connect_qdict(to);
+        }
+
+        if (qdict_haskey(addr, "port")) {
             addr_port = qdict_get_str(addr, "port");
             qdict_put_str(addrdict, "port", addr_port);
         }
     }
-
-    qobject_unref(addr);
 }
 
 bool migrate_watch_for_events(QTestState *who, const char *name,
@@ -225,6 +236,7 @@ char *resolve_machine_version(const char *alias, const char *var1,
 typedef struct {
     char *name;
     void (*func)(void);
+    void (*func_full)(void *);
 } MigrationTest;
 
 static void migration_test_destroy(gpointer data)
@@ -251,6 +263,29 @@ void migration_test_add(const char *path, void (*fn)(void))
     test->name = g_strdup(path);
 
     qtest_add_data_func_full(path, test, migration_test_wrapper,
+                             migration_test_destroy);
+}
+
+static void migration_test_wrapper_full(const void *data)
+{
+    MigrationTest *test = (MigrationTest *)data;
+
+    g_test_message("Running /%s%s", qtest_get_arch(), test->name);
+    test->func_full(test->name);
+}
+
+void migration_test_add_suffix(const char *path, const char *suffix,
+                               void (*fn)(void *))
+{
+    MigrationTest *test = g_new0(MigrationTest, 1);
+
+    g_assert(g_str_has_suffix(path, "/"));
+    g_assert(!g_str_has_prefix(suffix, "/"));
+
+    test->func_full = fn;
+    test->name = g_strconcat(path, suffix, NULL);
+
+    qtest_add_data_func_full(test->name, test, migration_test_wrapper_full,
                              migration_test_destroy);
 }
 
@@ -284,6 +319,7 @@ bool probe_o_direct_support(const char *tmpfs)
 
     buf = qemu_try_memalign(len, len);
     g_assert(buf);
+    memset(buf, 0, len);
 
     ret = pwrite(fd, buf, len, offset);
     unlink(filename);

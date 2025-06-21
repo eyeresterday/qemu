@@ -4,11 +4,9 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-import os
-
 from qemu_test import LinuxKernelTest, Asset, exec_command_and_wait_for_pattern
-from qemu_test import interrupt_interactive_console_until_pattern
-from unittest import skipUnless
+from qemu_test import interrupt_interactive_console_until_pattern, skipSlowTest
+
 
 class EmcraftSf2Machine(LinuxKernelTest):
 
@@ -32,10 +30,10 @@ class EmcraftSf2Machine(LinuxKernelTest):
          '20200711-gsj-qemu-0/nuvoton-npcm730-gsj.dtb'),
         '3249b2da787d4b9ad4e61f315b160abfceb87b5e1895a7ce898ce7f40c8d4045')
 
-    @skipUnless(os.getenv('QEMU_TEST_TIMEOUT_EXPECTED'), 'Test might timeout')
+    @skipSlowTest()
     def test_arm_quanta_gsj(self):
         self.set_machine('quanta-gsj')
-        image_path = self.uncompress(ASSET_IMAGE, 'obmc.mtd', format='gz')
+        image_path = self.uncompress(self.ASSET_IMAGE, format='gz')
 
         self.vm.set_console()
         drive_args = 'file=' + image_path + ',if=mtd,bus=0,unit=0'

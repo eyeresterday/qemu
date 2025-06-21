@@ -50,10 +50,10 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
-#include "exec/address-spaces.h"
-#include "exec/exec-all.h"
+#include "system/address-spaces.h"
 #include "gdbstub/enums.h"
 #include "hw/boards.h"
+#include "system/accel-ops.h"
 #include "system/cpus.h"
 #include "system/hvf.h"
 #include "system/hvf_int.h"
@@ -354,7 +354,7 @@ static inline int hvf_gdbstub_sstep_flags(void)
     return SSTEP_ENABLE | SSTEP_NOIRQ;
 }
 
-static void hvf_accel_class_init(ObjectClass *oc, void *data)
+static void hvf_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "HVF";
@@ -366,6 +366,7 @@ static void hvf_accel_class_init(ObjectClass *oc, void *data)
 static const TypeInfo hvf_accel_type = {
     .name = TYPE_HVF_ACCEL,
     .parent = TYPE_ACCEL,
+    .instance_size = sizeof(HVFState),
     .class_init = hvf_accel_class_init,
 };
 
@@ -577,7 +578,7 @@ static void hvf_remove_all_breakpoints(CPUState *cpu)
     }
 }
 
-static void hvf_accel_ops_class_init(ObjectClass *oc, void *data)
+static void hvf_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

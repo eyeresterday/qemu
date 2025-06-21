@@ -21,9 +21,10 @@
 #include "qemu/main-loop.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
-#include "exec/cpu_ldst.h"
-#include "exec/address-spaces.h"
-#include "exec/exec-all.h"
+#include "accel/tcg/cpu-ldst.h"
+#include "system/address-spaces.h"
+#include "system/memory.h"
+#include "exec/cputlb.h"
 #include "tcg/helper-tcg.h"
 #include "hw/i386/apic.h"
 
@@ -468,8 +469,7 @@ void helper_rdmsr(CPUX86State *env)
         val = x86_cpu->ucode_rev;
         break;
     case MSR_CORE_THREAD_COUNT: {
-        CPUState *cs = CPU(x86_cpu);
-        val = (cs->nr_threads * cs->nr_cores) | (cs->nr_cores << 16);
+        val = cpu_x86_get_msr_core_thread_count(x86_cpu);
         break;
     }
     case MSR_APIC_START ... MSR_APIC_END: {

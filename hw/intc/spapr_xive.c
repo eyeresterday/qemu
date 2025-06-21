@@ -1,10 +1,9 @@
 /*
  * QEMU PowerPC sPAPR XIVE interrupt controller model
  *
- * Copyright (c) 2017-2018, IBM Corporation.
+ * Copyright (c) 2017-2024, IBM Corporation.
  *
- * This code is licensed under the GPL version 2 or later. See the
- * COPYING file in the top-level directory.
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
@@ -431,7 +430,8 @@ static int spapr_xive_write_nvt(XiveRouter *xrtr, uint8_t nvt_blk,
 
 static int spapr_xive_match_nvt(XivePresenter *xptr, uint8_t format,
                                 uint8_t nvt_blk, uint32_t nvt_idx,
-                                bool cam_ignore, uint8_t priority,
+                                bool crowd, bool cam_ignore,
+                                uint8_t priority,
                                 uint32_t logic_serv, XiveTCTXMatch *match)
 {
     CPUState *cs;
@@ -809,7 +809,7 @@ static bool spapr_xive_in_kernel_xptr(const XivePresenter *xptr)
     return spapr_xive_in_kernel(SPAPR_XIVE(xptr));
 }
 
-static void spapr_xive_class_init(ObjectClass *klass, void *data)
+static void spapr_xive_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     XiveRouterClass *xrc = XIVE_ROUTER_CLASS(klass);
@@ -856,7 +856,7 @@ static const TypeInfo spapr_xive_info = {
     .instance_size = sizeof(SpaprXive),
     .class_init = spapr_xive_class_init,
     .class_size = sizeof(SpaprXiveClass),
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { TYPE_SPAPR_INTC },
         { }
     },
