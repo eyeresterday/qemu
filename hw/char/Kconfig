@@ -92,3 +92,8 @@ config IP_OCTAL_232
     bool
     default y
     depends on IPACK
+
+config S32K358_LPUART
+    bool
+    default y
+    depends on S32K358_SOC

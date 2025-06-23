@@ -9,18 +9,19 @@
 #include "hw/arm/s32k358.h"
 #include "hw/clock.h"
 #include "qom/object.h"
+#include "hw/char/s32k358_uart.h"
+
 #include <stddef.h>
 
-#define TYPE_S32K358_SOC "s32k358_soc"       // Defines the unique type name for this SoC
-OBJECT_DECLARE_SIMPLE_TYPE(S32K358State, S32K358_SOC)  // Declares the type and associated methods for the SoC in QEMU's object model.
+#define TYPE_S32K358_SOC "s32k358_soc"
+OBJECT_DECLARE_SIMPLE_TYPE(S32K358State, S32K358_SOC)
 
 /* UART and DMA device types (defined elsewhere, e.g., in uart.c and dma.c) */
-#define TYPE_S32K358_UART "s32k358-uart"   //Defines the type name for the UART peripheral.
-#define TYPE_S32K358_DMA  "s32k358-dma"    //Defines the type name for the DMA peripheral.
+#define TYPE_S32K358_UART "s32k358-uart"
+#define TYPE_S32K358_DMA  "s32k358-dma"
 
-#define S32K358_NUM_TIMERS 8 //?
+#define S32K358_NUM_TIMERS 8
 
-////---represents the state of our board during the emulation. Every connected device needs to be part of the state ---////
 /* SoC state structure */
 struct S32K358State {
     /*< private >*/
@@ -32,32 +33,24 @@ struct S32K358State {
     ARMv7MState armv7m;
 
     /* Memory Regions */
-    MemoryRegion itcm; //RO, probably
-    // Overlaps itcm2
+    MemoryRegion itcm;
 
-    MemoryRegion sram[3]; //RW
-    //	Program Flash
-    MemoryRegion pflash[4]; //RX
-    //I don't think it's possible to model a RX behavior but we can model a RO behavior
-    //	Data Flash
-    MemoryRegion dflash; //RW
+    MemoryRegion sram[3];
+    MemoryRegion pflash[4];
+    MemoryRegion dflash;
  
-    MemoryRegion dtcm; //RW
-    // Overlabps dtcm2
-
-    MemoryRegion aips0; //RO?
-    MemoryRegion aips1; //RO?
-    MemoryRegion aips2; //RO?
+    MemoryRegion dtcm;
+    MemoryRegion aips0;
+    MemoryRegion aips1;
+    MemoryRegion aips2;
 
     MemoryRegion mc_me;
 
     MemoryRegion flash_alias;
 
-    //Declare the device state for UART and DMA.
     /* Peripherals */
-    DeviceState uart0;       // UART0 device
-    DeviceState uart1;       // UART1 device
-    DeviceState dma;         // DMA controller device
+    S32K358LPUARTState lpuart[16];
+    DeviceState dma;
 
     /* Clocks */
     Clock *refclk;

@@ -2,15 +2,21 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
-#include "hw/arm/s32k358_soc.h"
-#include "hw/arm/boot.h"
 #include "qom/object.h"
+#include "hw/arm/armv7m.h"
+#include "hw/arm/boot.h"
 #include "hw/boards.h"
+#include "hw/sysbus.h"
+#include "hw/irq.h"
+#include "hw/clock.h"
+#include "hw/qdev-properties.h"
 #include "hw/qdev-clock.h"
 #include "hw/misc/unimp.h"
-//#include "sysemu/sysemu.h"
-#include "system/address-spaces.h"
 #include "qemu/units.h"
+#include "system/address-spaces.h"
+#include "system/system.h"
+#include "hw/arm/s32k358_soc.h"
+#include "hw/char/s32k358_uart.h"
 
 #define FOREACH(iterator, array) for(typeof(&array[0]) iterator = array; iterator < array + sizeof(array)/sizeof(array[0]); iterator++)
 
@@ -26,106 +32,106 @@
 #define DMA_IRQ   4
 
 enum eMemPerms {
-    mp_ro,
-    mp_rw,
+    RO,
+    RW,
 };
 
-struct mem_region_t {
+typedef struct {
     const char *name;
     hwaddr base;
     size_t length;
     size_t offset;
     enum eMemPerms perms;
-};
+} MemRegion;
 
-struct ioMemRegion {
+typedef struct {
     const char *name;
     hwaddr base;
     size_t length;
     size_t offset;
     MemoryRegionOps ops;
-};
+} IOMemRegion;
 
-struct unimp_dev_t {
+typedef struct {
     const char *name;
     hwaddr base;
     size_t length;
-};
+} UnimpDev;
 
-static const struct mem_region_t mem_regions[] = {
+static const MemRegion mem_regions[] = {
     {
         .name = "S32K358.itcm0",
         .base = S32K358_ITCM0_BASE,
         .length = S32K358_ITCM_LENGTH,
         .offset = offsetof(S32K358State, itcm),
-        .perms = mp_rw,
+        .perms = RW,
     },
     {
         .name = "S32K358.pflash0",
         .base = S32K358_PFLASH0_BASE,
         .length = S32K358_PFLASH_BLK_LENGTH,
         .offset = offsetof(S32K358State, pflash[0]),
-        .perms = mp_ro,
+        .perms = RO,
     },
     {
         .name = "S32K358.pflash1",
         .base = S32K358_PFLASH1_BASE,
         .length = S32K358_PFLASH_BLK_LENGTH,
         .offset = offsetof(S32K358State, pflash[1]),
-        .perms = mp_ro,
+        .perms = RO,
     },
     {
         .name = "S32K358.pflash2",
         .base = S32K358_PFLASH2_BASE,
         .length = S32K358_PFLASH_BLK_LENGTH,
         .offset = offsetof(S32K358State, pflash[2]),
-        .perms = mp_ro,
+        .perms = RW,
     },
     {
         .name = "S32K358.pflash3",
         .base = S32K358_PFLASH3_BASE,
         .length = S32K358_PFLASH_BLK_LENGTH,
         .offset = offsetof(S32K358State, pflash[3]),
-        .perms = mp_ro,
+        .perms = RO,
     },
     {
         .name = "S32K358.dflash2",
         .base = S32K358_DFLASH_BASE,
         .length = S32K358_DFLASH_LENGTH,
         .offset = offsetof(S32K358State, dflash),
-        .perms = mp_ro,
+        .perms = RO,
     },
     {
         .name = "S32K358.sram0",
         .base = S32K358_SRAM0_BASE,
         .length = S32K358_SRAM_BLK_LENGTH,
         .offset = offsetof(S32K358State, sram[0]),
-        .perms = mp_rw,
+        .perms = RW,
     },
     {
         .name = "S32K358.sram1",
         .base = S32K358_SRAM1_BASE,
         .length = S32K358_SRAM_BLK_LENGTH,
         .offset = offsetof(S32K358State, sram[1]),
-        .perms = mp_rw,
+        .perms = RW,
     },
     {
         .name = "S32K358.sram2",
         .base = S32K358_SRAM2_BASE,
         .length = S32K358_SRAM_BLK_LENGTH,
         .offset = offsetof(S32K358State, sram[2]),
-        .perms = mp_rw,
+        .perms = RW,
     },
     {
         .name = "S32K358.dtcm0",
         .base = S32K358_DTCM0_BASE,
         .length = S32K358_DTCM_LENGTH,
         .offset = offsetof(S32K358State, dtcm),
-        .perms = mp_rw,
+        .perms = RW,
     },
 };
 
-static const struct unimp_dev_t unimp_devs[] = {
+static const UnimpDev unimp_devs[] = {
     {.name = "S32K358.unimp.hse_xbic",                    .base = 0x40008000,     .length = 0x4000 },
     {.name = "S32K358.unimp.erm1",                        .base = 0x4000c000,     .length = 0x4000 },
     {.name = "S32K358.unimp.pfc1",                        .base = 0x40068000,     .length = 0x4000 },
@@ -320,8 +326,28 @@ static const struct unimp_dev_t unimp_devs[] = {
     {.name = "S32K358.unimp.pram_3",                      .base = 0x40588000,     .length = 0x4000 },
 };
 
-// This is done because FreeRTOS checks this memory region for this value before
-// initialization.
+static void lpuart_init(S32K358State *s, Error  **errp) {
+    DeviceState *armv7m = DEVICE(&s->armv7m);
+
+    for (size_t i = 0; i < 16; i++) {
+        DeviceState *dev = DEVICE(&(s->lpuart[i]));
+        SysBusDevice *busdev = SYS_BUS_DEVICE(dev);
+
+        qdev_prop_set_chr(dev, "chardev", serial_hd(i));
+        qdev_connect_clock_in(dev, "clk", i == 0 || i == 1 || i == 8 ? s->aips_plat_clk : s->aips_slow_clk);
+
+        if (!sysbus_realize(busdev, errp))
+            return;
+
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_mmio_map(busdev, 0, lpuart_bases[i]);
+        sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, lpuart_irq[i]));
+    }
+}
+
+/* This is done because FreeRTOS checks this memory region for this value before
+ * initialization.
+ * */
 static uint64_t mc_me_dummy_read(void *opaque, hwaddr addr, unsigned int size) {
     return  addr == 0x00000310? 0x01000000 : 0x00000000;
 }
@@ -339,8 +365,10 @@ static const MemoryRegionOps mc_me_dummy_ops = {
 
 static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
 {
-    S32K358State *s = S32K358_SOC(dev_soc);            //Cast the generic DeviceState pointer to the SoC-specific state.
-    MemoryRegion *system_memory = get_system_memory(); //Get the global system memory region, which acts as the root for all memory mappings.
+    /* Cast the generic DeviceState pointer to the SoC-specific state. */
+    S32K358State *s = S32K358_SOC(dev_soc);            
+    /* Get the global system memory region, which acts as the root for all memory mappings. */
+    MemoryRegion *system_memory = get_system_memory(); 
     DeviceState *armv7m;
     //SysBusDevice *busdev;
     Error *err = NULL;
@@ -361,20 +389,19 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
         return;
     }
     
-    //Initialize clocks
+    /* Initialize clocks */
     clock_set_mul_div(s->refclk, 8, 1);
     clock_set_source(s->refclk, s->sysclk);
     clock_set_hz(s->aips_plat_clk, 80000000);
     clock_set_hz(s->aips_plat_clk, 40000000);
 
-    //Initialization of the memory mappings
-    //for (int i = 0; i < sizeof(mem_regions)/sizeof(mem_regions[0]); i++) {
+    /* Initialization of the memory mappings */
     FOREACH(region, mem_regions) {
         switch (region->perms) {
-            case mp_rw:
+            case RO:
                 memory_region_init_ram((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
                 break;
-            case mp_ro:
+            case RW:
                 memory_region_init_rom((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
                 break;
         }
@@ -385,17 +412,18 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
         memory_region_add_subregion(system_memory, region->base, (MemoryRegion *)((char *)s + region->offset));
     }
 
-    //Initialize mc_me dummy region
+    /* Initialize mc_me dummy region */
     memory_region_init_io(&s->mc_me, OBJECT(dev_soc), &mc_me_dummy_ops, s, "S32K358.mc_me", S32K358_MC_ME_LENGTH);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mc_me);
     memory_region_add_subregion(system_memory, S32K358_MC_ME_BASE, &s->mc_me);
 
-    //Declare uniimplemented devices
+    /* Declare unimplemented devices */
     FOREACH(device, unimp_devs)
         create_unimplemented_device(device->name, device->base, device->length);
 
-    // Configuration of the Arm Cortex-M device
-    // Many of those values can be found on a specific table in the manual
+    /* Configuration of the Arm Cortex-M device
+     * Many of those values can be found on a specific table in the manual
+     */
     armv7m = DEVICE(&s->armv7m);
     qdev_prop_set_uint32(   armv7m,    "num-irq",           240                            );
     qdev_prop_set_uint8(    armv7m,    "num-prio-bits",     4                              );
@@ -414,6 +442,8 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), errp)) {
         return;
     }
+
+    lpuart_init(s, errp);
 }
 
 static void s32k358_soc_class_init(ObjectClass *class, const void *data)
@@ -432,6 +462,9 @@ static void s32k358_soc_init(Object *obj)
     s->sysclk = qdev_init_clock_in(DEVICE(s), "sysclk", NULL, NULL, 0);
     s->aips_plat_clk = qdev_init_clock_in(DEVICE(s), "aips_plat_clk", NULL, NULL, 0);
     s->aips_slow_clk = qdev_init_clock_in(DEVICE(s), "aips_slow_clk", NULL, NULL, 0);
+
+    for (int i = 0; i < 16; i++)
+        object_initialize_child(obj, "lpuart[*]", &s->lpuart[i], TYPE_S32K358_LPUART);
 }
 
 static const TypeInfo s32k358_soc_info = {
