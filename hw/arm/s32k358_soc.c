@@ -20,15 +20,13 @@
 
 #define FOREACH(iterator, array) for(typeof(&array[0]) iterator = array; iterator < array + sizeof(array)/sizeof(array[0]); iterator++)
 
-#define  XTAL            (50000000UL)     /* Oscillator frequency */
-#define VTOR_OFFT 8192
+#define  XTAL            (50000000UL)
+#define VTOR_OFFT 0x0800
 
 #define UART0_ADDR 0x40328000
 #define UART1_ADDR 0x4032C000
 #define DMA_ADDR   0x4020C000
 
-#define UART0_IRQ 141
-#define UART1_IRQ 142
 #define DMA_IRQ   4
 
 enum eMemPerms {
@@ -399,10 +397,10 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
     FOREACH(region, mem_regions) {
         switch (region->perms) {
             case RO:
-                memory_region_init_ram((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
+                memory_region_init_rom((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
                 break;
             case RW:
-                memory_region_init_rom((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
+                memory_region_init_ram((MemoryRegion*) ((char *)s + region->offset) , OBJECT(dev_soc), region->name, region->length, &err);
                 break;
         }
         if (err != NULL) {
@@ -430,6 +428,14 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
     qdev_prop_set_string(   armv7m,    "cpu-type",          ARM_CPU_TYPE_NAME("cortex-m7") );
     qdev_prop_set_uint32(   armv7m,    "init-svtor",        S32K358_PFLASH_BASE + VTOR_OFFT);
     qdev_prop_set_uint32(   armv7m,    "init-nsvtor",       S32K358_PFLASH_BASE + VTOR_OFFT);
+    /* The way the IVT works in this board is complicated. A structure which can
+     * be in many places but one of them is in the start of the program flash is
+     * read by the SBAF, which then sets the configuration of the board
+     * according to the fields in this structure, and also sets the VTOR for
+     * each core. We can't do that here without significant effort. However, the
+     * address of the IVT can be found in the symbol __COREn_VTOR (CORE0 in this
+     * case) in the ELF file.
+     */
     qdev_prop_set_uint32(   armv7m,    "mpu-ns-regions",    16                             );
     qdev_prop_set_uint32(   armv7m,    "mpu-s-regions",     16                             );
     qdev_prop_set_bit(      armv7m,    "enable-bitband",    false                          ); //Our CPU does not support bitbanding.
