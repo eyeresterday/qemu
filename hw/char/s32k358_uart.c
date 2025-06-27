@@ -1,9 +1,11 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties-system.h"
 #include "qemu/log.h"
 #include "hw/char/serial.h"
 #include "chardev/char-serial.h"
+#include "chardev/char-fe.h"
 #include "hw/char/s32k358_uart.h"
 
 #define UART(obj) OBJECT_CHECK(S32K358LPUARTState, (obj), TYPE_S32K358_LPUART)
@@ -50,6 +52,8 @@ static void s32k358_lpuart_update_baud(S32K358LPUARTState *s) {
     uint32_t divisor = FIELD_EX32(s->regs[R_LPUART_BAUD], LPUART_BAUD, SBR);
     uint32_t baud_clock = clock_get_hz(s->clk);
     params.speed = baud_clock * divisor * oversampling_rate;
+    params.parity = 1;
+    params.stop_bits = 1;
 
     qemu_chr_fe_ioctl(&s->chr, CHR_IOCTL_SERIAL_SET_PARAMS, &params);
 }
@@ -60,6 +64,7 @@ static void s32k358_lpuart_reset(DeviceState *dev) {
     uart_reset(s->regs, 0); /* TODO: Determine number of LPUART */
     s32k358_lpuart_update_irq(s);
     s32k358_lpuart_update_baud(s);
+    qemu_chr_fe_accept_input(&s->chr);
 }
 
 static int s32k358_lpuart_can_receive(void *opaque) {
@@ -88,17 +93,17 @@ static uint64_t s32k358_lpuart_read(void *opaque, hwaddr addr, unsigned size) {
     S32K358LPUARTState *s = (S32K358LPUARTState *)opaque;
 	addr &= 0xFF;
     switch (addr) {
-        case R_LPUART_DATA:
+        case A_LPUART_DATA:
 			s->regs[R_LPUART_STAT] &= ~R_LPUART_STAT_RDRF_MASK;
             qemu_chr_fe_accept_input(&s->chr);
             s32k358_lpuart_update_irq(s);
             /* Fallthrough */
-        case R_LPUART_STAT:
-        case R_LPUART_CTRL:
-        case R_LPUART_FIFO:
-		case R_LPUART_BAUD:
+        case A_LPUART_STAT:
+        case A_LPUART_CTRL:
+        case A_LPUART_FIFO:
+		case A_LPUART_BAUD:
             return s->regs[addr];
-        case R_LPUART_DATARO:
+        case A_LPUART_DATARO:
             return s->regs[R_LPUART_DATA];
         default:
             qemu_log_mask(LOG_GUEST_ERROR, "UART: Read from unsupported register 0x%02lx\n", addr);
@@ -112,16 +117,16 @@ static void s32k358_lpuart_write(void *opaque, hwaddr addr, uint64_t value, unsi
     uint8_t wrval;
     /* For now writing to readonly bits will do nothing */
     switch (addr) {
-        case R_LPUART_PINCFG:
+        case A_LPUART_PINCFG:
             s->regs[R_LPUART_PINCFG] = value & R_LPUART_PINCFG_TRGSEL_MASK;
             break;
-        case R_LPUART_GLOBAL:
+        case A_LPUART_GLOBAL:
             s->regs[R_LPUART_GLOBAL] = value;
             if (value & R_LPUART_GLOBAL_RST_MASK)
                 s32k358_lpuart_reset((DeviceState *)s);
             break;
 
-        case R_LPUART_DATA:
+        case A_LPUART_DATA:
 			s->regs[R_LPUART_STAT] |= R_LPUART_STAT_TDRE_MASK;
             /* Technically you can write 16 and 32 bits to this register, and
              * the data will be added to the fifo, but since we don't have a
@@ -135,7 +140,7 @@ static void s32k358_lpuart_write(void *opaque, hwaddr addr, uint64_t value, unsi
             qemu_chr_fe_write(&s->chr, &wrval, 1);
             break;
 
-        case R_LPUART_BAUD:
+        case A_LPUART_BAUD:
             s->regs[R_LPUART_BAUD] = value;
             /* NOTES: LIN break interrupts are not yet implemented
              * RDMAE is not yet implemented
@@ -144,7 +149,7 @@ static void s32k358_lpuart_write(void *opaque, hwaddr addr, uint64_t value, unsi
             s32k358_lpuart_update_baud(s);
             break;
 
-        case R_LPUART_STAT:
+        case A_LPUART_STAT:
             if (value & R_LPUART_STAT_LBKDIF_MASK) {
                 s->regs[R_LPUART_STAT] &= ~R_LPUART_STAT_LBKDIF_MASK;
                 value &= ~R_LPUART_STAT_LBKDIF_MASK;
@@ -170,7 +175,7 @@ static void s32k358_lpuart_write(void *opaque, hwaddr addr, uint64_t value, unsi
             s->regs[R_LPUART_STAT] |= value;
             break;
 
-        case R_LPUART_CTRL:
+        case A_LPUART_CTRL:
             s->regs[R_LPUART_CTRL] = value;
             break;
             
@@ -198,10 +203,10 @@ static void s32k358_lpuart_realize(DeviceState *dev, Error **errp) {
         return;
     }
 
-    qemu_chr_fe_set_handlers(&s->chr, s32k358_lpuart_can_receive, s32k358_lpuart_receive, NULL, NULL, s, NULL, true);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
     memory_region_init_io(&s->mmio, OBJECT(s), &uart_ops, s, "uart-mmio", 0x4000);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
+    qemu_chr_fe_set_handlers(&s->chr, s32k358_lpuart_can_receive, s32k358_lpuart_receive, NULL, NULL, s, NULL, true);
 }
 
 static void s32k358_lpuart_instance_init(Object *obj) {
@@ -210,13 +215,17 @@ static void s32k358_lpuart_instance_init(Object *obj) {
     s->clk = qdev_init_clock_in(DEVICE(s), "clk", NULL, s, 0);
 }
 
+static const Property s32k358_lpuart_properties[] = {
+    DEFINE_PROP_CHR("chardev", S32K358LPUARTState, chr),
+};
+
 static void s32k358_lpuart_class_init(ObjectClass *klass, const void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = s32k358_lpuart_realize;
 
-    object_class_property_add_link(klass, "chardev", TYPE_CHARDEV, offsetof(S32K358LPUARTState, chr),
-            object_property_allow_set_link, 0);
+    //object_class_property_add_link(klass, "chardev", TYPE_CHARDEV, offsetof(S32K358LPUARTState, chr), object_property_allow_set_link, 0);
 
+    device_class_set_props(dc, s32k358_lpuart_properties);
     /*Ideally I should add a resettable interface but I have no time */
     device_class_set_legacy_reset(dc, s32k358_lpuart_reset);
 }
