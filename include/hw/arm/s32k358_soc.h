@@ -37,13 +37,8 @@ struct S32K358State {
     MemoryRegion dflash;
  
     MemoryRegion dtcm;
-    MemoryRegion aips0;
-    MemoryRegion aips1;
-    MemoryRegion aips2;
 
     MemoryRegion mc_me;
-
-    MemoryRegion flash_alias;
 
     /* Peripherals */
     S32K358LPUARTState lpuart[16];
