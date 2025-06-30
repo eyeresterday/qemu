@@ -10,15 +10,12 @@
 #include "hw/clock.h"
 #include "qom/object.h"
 #include "hw/char/s32k358_uart.h"
+#include "hw/dma/s32k358_dma.h"
 
 #include <stddef.h>
 
 #define TYPE_S32K358_SOC "s32k358_soc"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K358State, S32K358_SOC)
-
-/* UART and DMA device types (defined elsewhere, e.g., in uart.c and dma.c) */
-#define TYPE_S32K358_UART "s32k358-uart"
-#define TYPE_S32K358_DMA  "s32k358-dma"
 
 #define S32K358_NUM_TIMERS 8
 
@@ -50,7 +47,7 @@ struct S32K358State {
 
     /* Peripherals */
     S32K358LPUARTState lpuart[16];
-    DeviceState dma;
+    S32K358DMAState dma;
 
     /* Clocks */
     Clock *refclk;

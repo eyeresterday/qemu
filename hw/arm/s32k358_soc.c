@@ -339,8 +339,21 @@ static void lpuart_init(S32K358State *s, Error  **errp) {
 
         busdev = SYS_BUS_DEVICE(dev);
         sysbus_mmio_map(busdev, 0, lpuart_bases[i]);
-        sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, lpuart_irq[i]));
+        sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, lpuart_irq_base + i));
     }
+}
+
+static void dma_init(S32K358State *s, Error  **errp) {
+    DeviceState *armv7m = DEVICE(&s->armv7m);
+    DeviceState *dev = DEVICE(&(s->dma));
+    SysBusDevice *busdev = SYS_BUS_DEVICE(dev);
+
+    object_property_set_link(OBJECT(dev), "downstream", OBJECT(get_system_memory()), &error_fatal);
+    if (!sysbus_realize(busdev, errp))
+        return;
+
+    sysbus_mmio_map(busdev, 0, dma_base);
+    sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, dma_irq_base));
 }
 
 /* This is done because FreeRTOS checks this memory region for this value before
@@ -450,6 +463,7 @@ static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
     }
 
     lpuart_init(s, errp);
+    dma_init(s, errp);
 }
 
 static void s32k358_soc_class_init(ObjectClass *class, const void *data)
@@ -471,6 +485,8 @@ static void s32k358_soc_init(Object *obj)
 
     for (int i = 0; i < 16; i++)
         object_initialize_child(obj, "lpuart[*]", &s->lpuart[i], TYPE_S32K358_LPUART);
+
+    object_initialize_child(obj, "dma", &s->dma, TYPE_S32K358_DMA);
 }
 
 static const TypeInfo s32k358_soc_info = {

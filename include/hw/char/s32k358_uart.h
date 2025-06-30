@@ -207,7 +207,8 @@ static const hwaddr lpuart_bases[16] = {
     0x404A8000,
 };
 
-static const unsigned lpuart_irq[] = {141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156}; 
+//static const unsigned lpuart_irq[] = {141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156}; 
+static const unsigned lpuart_irq_base = 141; 
 
 
 struct S32K358LPUARTState {
@@ -220,8 +221,10 @@ struct S32K358LPUARTState {
     CharBackend chr;
 
     uint32_t regs[0x70];
-    uint16_t fifo[256];
-    uint8_t fifo_index;
+    uint8_t rxfifo[256];
+    uint8_t rxfifohead;
+    uint8_t rxfifotail;
+    uint8_t rxfifoen;
 };
 
 #endif

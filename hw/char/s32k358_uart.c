@@ -42,8 +42,35 @@ static inline void uart_reset(uint32_t uart_registers[], hwaddr uart_addr) {
 
 static void s32k358_lpuart_update_irq(S32K358LPUARTState *s) {
     uint32_t status_mask = s->regs[R_LPUART_CTRL] & s->regs[R_LPUART_STAT] ;
-    qemu_set_irq(s->irq, status_mask &
-            (R_LPUART_CTRL_TIE_MASK | R_LPUART_CTRL_TCIE_MASK | R_LPUART_CTRL_RIE_MASK));
+    qemu_set_irq(s->irq, (status_mask &
+                (R_LPUART_CTRL_TIE_MASK | R_LPUART_CTRL_TCIE_MASK | R_LPUART_CTRL_RIE_MASK)) != 0);
+    //qemu_set_irq(s->irq, 0);
+}
+
+static void s32k358_lpuart_rxfifo_enqueue(S32K358LPUARTState *s, uint8_t value) {
+    static const uint8_t rxfifosizes[] = {1, 4, 8, 16, 32, 64};
+    uint8_t rxfifosize = rxfifosizes[(s->regs[R_LPUART_FIFO] & R_LPUART_FIFO_RXFIFOSIZE_MASK) >> R_LPUART_FIFO_RXFIFOSIZE_SHIFT];
+    if (s->regs[R_LPUART_STAT] & R_LPUART_STAT_RDRF_MASK)
+        return;
+    if (~s->regs[R_LPUART_FIFO] & R_LPUART_FIFO_RXFE_MASK)
+        rxfifosize = 1;
+    if (s->rxfifohead == (s->rxfifotail - 1 + rxfifosize) % rxfifosize || rxfifosize == 1)
+        s->regs[R_LPUART_STAT] |= R_LPUART_STAT_RDRF_MASK;
+    s->rxfifo[s->rxfifohead] = value;
+    s->rxfifohead = (s->rxfifohead + 1) % rxfifosize;
+    s32k358_lpuart_update_irq(s);
+}
+
+static uint8_t s32k358_lpuart_rxfifo_dequeue(S32K358LPUARTState *s) {
+    static const uint8_t rxfifosizes[] = {1, 4, 8, 16, 32, 64};
+    uint8_t rxfifosize = rxfifosizes[(s->regs[R_LPUART_FIFO] & R_LPUART_FIFO_RXFIFOSIZE_MASK) >> R_LPUART_FIFO_RXFIFOSIZE_SHIFT];
+    uint8_t ret = s->rxfifo[s->rxfifotail];
+    if (~s->regs[R_LPUART_FIFO] & R_LPUART_FIFO_RXFE_MASK)
+        rxfifosize = 1;
+    s->rxfifotail = (s->rxfifotail + 1) % rxfifosize;
+    s->regs[R_LPUART_STAT] &= ~R_LPUART_STAT_RDRF_MASK;
+    s32k358_lpuart_update_irq(s);
+    return ret;
 }
 
 static void s32k358_lpuart_update_baud(S32K358LPUARTState *s) {
@@ -78,9 +105,7 @@ static void s32k358_lpuart_receive(void *opaque, const uint8_t *buf, int size) {
     if ((s->regs[R_LPUART_CTRL] & R_LPUART_CTRL_RE_MASK) == 0)
         return;
 
-    s->regs[R_LPUART_DATA] = data;
-    s->regs[R_LPUART_CTRL] |= R_LPUART_STAT_RDRF_MASK;
-    s32k358_lpuart_update_irq(s);
+    s32k358_lpuart_rxfifo_enqueue(s, data);
 }
 
 
@@ -94,17 +119,15 @@ static uint64_t s32k358_lpuart_read(void *opaque, hwaddr addr, unsigned size) {
 	addr &= 0xFF;
     switch (addr) {
         case A_LPUART_DATA:
-			s->regs[R_LPUART_STAT] &= ~R_LPUART_STAT_RDRF_MASK;
             qemu_chr_fe_accept_input(&s->chr);
-            s32k358_lpuart_update_irq(s);
-            /* Fallthrough */
+            return s32k358_lpuart_rxfifo_dequeue(s);
         case A_LPUART_STAT:
         case A_LPUART_CTRL:
         case A_LPUART_FIFO:
 		case A_LPUART_BAUD:
             return s->regs[addr];
         case A_LPUART_DATARO:
-            return s->regs[R_LPUART_DATA];
+            return s->rxfifo[s->rxfifotail];
         default:
             qemu_log_mask(LOG_GUEST_ERROR, "UART: Read from unsupported register 0x%02lx\n", addr);
             return 0;
@@ -175,6 +198,10 @@ static void s32k358_lpuart_write(void *opaque, hwaddr addr, uint64_t value, unsi
             s->regs[R_LPUART_STAT] |= value;
             break;
 
+        case A_LPUART_FIFO:
+            s->regs[R_LPUART_FIFO] = value;
+            s->rxfifoen = value & R_LPUART_FIFO_RXFE_MASK;
+            break;
         case A_LPUART_CTRL:
             s->regs[R_LPUART_CTRL] = value;
             break;
@@ -207,6 +234,9 @@ static void s32k358_lpuart_realize(DeviceState *dev, Error **errp) {
     memory_region_init_io(&s->mmio, OBJECT(s), &uart_ops, s, "uart-mmio", 0x4000);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
     qemu_chr_fe_set_handlers(&s->chr, s32k358_lpuart_can_receive, s32k358_lpuart_receive, NULL, NULL, s, NULL, true);
+    s->rxfifoen = 0;
+    s->rxfifohead = 0;
+    s->rxfifotail = 0;
 }
 
 static void s32k358_lpuart_instance_init(Object *obj) {
