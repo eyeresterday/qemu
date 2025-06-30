@@ -58,7 +58,7 @@ REG32(TCD0_MLOFF,            0x28)
 REG32(TCD0_SLAST,            0x2C)
 REG32(TCD0_DADDR,           0x30)
 REG16(TCD0_DOFF,            0x34)
-REG16(TCD0_CITER,           0x34)
+REG16(TCD0_CITER,           0x36)
     FIELD(TCD0_CITER,CITER,   0,  15)
     FIELD(TCD0_CITER,ELINK,   15,  1)
 REG32(TCD0_DLAST_SGA,       0x38)
@@ -93,7 +93,19 @@ struct S32K358DMAState {
     uint32_t edma_regs[4];
     ///* Channel arbitration groups will be unimplemented */
     uint32_t chn[32][8];
-    uint32_t tcd[32][8];
+    hwaddr saddr;
+    uint32_t soff;
+    uint32_t dsize;
+    uint32_t dmod;
+    uint32_t ssize;
+    uint32_t smod;
+    uint32_t nbytes;
+    uint32_t slast;
+    hwaddr daddr;
+    uint32_t doff;
+    uint32_t dlast;
+    uint32_t intmajor;
+
 };
 
 #endif

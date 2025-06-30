@@ -25,25 +25,21 @@ static const uint32_t chn_reset_vec[] = {
     0x00000000,
 };
 
-static const uint32_t tcd_reset_vec[8] = {
-    0x00000000,
-};
-
 static void s32k358_dma_run(S32K358DMAState *s) {
     static const int transfer_sizes[] = {1, 2, 4, 8};
 
-    hwaddr saddr = s->tcd[0][R_TCD0_SADDR];
-    hwaddr daddr = s->tcd[0][R_TCD0_DADDR];
-    uint32_t dsize = transfer_sizes[s->tcd[0][R_TCD0_ATTR] & R_TCD0_ATTR_DSIZE_MASK >> R_TCD0_ATTR_DSIZE_SHIFT];
-    uint32_t dmod = (s->tcd[0][R_TCD0_ATTR] & R_TCD0_ATTR_DMOD_MASK) >> R_TCD0_ATTR_DMOD_SHIFT;
-    uint32_t ssize = transfer_sizes[(s->tcd[0][R_TCD0_ATTR] & R_TCD0_ATTR_SSIZE_MASK) >> R_TCD0_ATTR_SSIZE_SHIFT];
-    uint32_t smod = (s->tcd[0][R_TCD0_ATTR] & R_TCD0_ATTR_SMOD_MASK) >> R_TCD0_ATTR_SMOD_SHIFT;
-    int32_t slast = s->tcd[0][R_TCD0_SLAST];
-    int32_t dlast = s->tcd[0][R_TCD0_DLAST_SGA];
-    hwaddr soff = s->tcd[0][R_TCD0_SOFF];
-    hwaddr doff = s->tcd[0][R_TCD0_DOFF];
-    uint32_t int_flag = s->tcd[0][R_TCD0_CSR] & R_TCD0_CSR_INTMAJOR_MASK;
-    uint32_t nbytes = (s->tcd[0][R_TCD0_MLOFF] & R_TCD0_MLOFF_NBYTES_MASK) >> R_TCD0_MLOFF_NBYTES_SHIFT;
+    hwaddr saddr = s->saddr;
+    hwaddr daddr = s->daddr;
+    uint32_t dsize = transfer_sizes[s->dsize];
+    uint32_t dmod = s->dmod;
+    uint32_t ssize = transfer_sizes[s->ssize];
+    uint32_t smod = s->ssize;
+    uint32_t slast = s->slast;
+    uint32_t dlast = s->dlast;
+    hwaddr soff = s->soff;
+    hwaddr doff = s->doff;
+    uint32_t int_flag = s->intmajor;
+    uint32_t nbytes = s->nbytes;
     int readc = 0;
     uint64_t sbuf;
     /* Multibyte writes/reads are unimplemented */
@@ -67,14 +63,12 @@ static void s32k358_dma_run(S32K358DMAState *s) {
         saddr += soff;
         daddr += doff;
     }
-    s->tcd[0][R_TCD0_SADDR] = saddr + slast;
-    s->tcd[0][R_TCD0_DADDR] = daddr + dlast;
-    s->tcd[0][R_CH0_CSR] &= R_CH0_CSR_ACTIVE_MASK;
-    s->tcd[0][R_CH0_CSR] |= R_CH0_CSR_DONE_MASK;
+    s->saddr = saddr + slast;
+    s->daddr = daddr + dlast;
     if (int_flag) {
-        s->tcd[0][R_CH0_INT] |= 1;
+        s->chn[0][R_CH0_INT] |= 1;
         s->edma_regs[R_DMA_INT] |= 1;
-        qemu_set_irq(s->irq, 1);
+        //qemu_set_irq(s->irq, 1);
     }
 }
 
@@ -87,10 +81,10 @@ static void s32k358_dma_reset(DeviceState *dev) {
     /*Ideally we should reset all 32 channels but for now we're only using only
      * one
      */
-    memcpy(&s->tcd[0], tcd_reset_vec, sizeof(s->tcd[0]));
 }
 
 static uint64_t s32k358_dma_read(void *opaque, hwaddr offset, unsigned size) {
+    offset += dma_base;
     S32K358DMAState *s = (S32K358DMAState *) opaque;
 
     if (offset > 0x4021003E || (0x40210000 > offset && offset > 0x4020000C)) {
@@ -103,12 +97,36 @@ static uint64_t s32k358_dma_read(void *opaque, hwaddr offset, unsigned size) {
     }
     if (0x40210000 <= offset && offset < 0x40210020)
         return s->chn[0][offset & 0xFF];
-    else
-        return s->tcd[0][(offset & 0xFF) - 0x20];
+    else {
+        switch (offset & 0xFF) {
+            case A_TCD0_SADDR:
+                return s->saddr;
+            case A_TCD0_SOFF:
+                return s->soff;
+            case A_TCD0_ATTR:
+                return (s->dsize) | (s->dmod << R_TCD0_ATTR_DMOD_SHIFT) | (s->ssize << R_TCD0_ATTR_SSIZE_SHIFT) | (s->smod << R_TCD0_ATTR_SMOD_SHIFT);
+            case A_TCD0_MLOFF:
+                return s->nbytes;
+            case A_TCD0_SLAST:
+                return s->slast;
+            case A_TCD0_DADDR:
+                return s->daddr;
+            case A_TCD0_DOFF:
+                return s->doff;
+            case A_TCD0_DLAST_SGA:
+                return s->dlast;
+            case A_TCD0_CSR:
+                return s->intmajor << 1;
+            default:
+                qemu_log_mask(LOG_GUEST_ERROR, "DMA: Read from unimplemented channel or arbitration group: 0x%02lx\n", offset);
+                return 0;
+        }
+    }
 }
 
 static void s32k358_dma_write(void *opaque, hwaddr offset, uint64_t value, unsigned size) {
     S32K358DMAState *s = (S32K358DMAState *) opaque;
+    offset += dma_base;
 
     if (offset > 0x4021003E || (0x40210000 > offset && offset > 0x4020000C)) {
         qemu_log_mask(LOG_GUEST_ERROR, "DMA: Read from unimplemented channel or arbitration group: 0x%02lx\n", offset);
@@ -130,8 +148,7 @@ static void s32k358_dma_write(void *opaque, hwaddr offset, uint64_t value, unsig
                 break;
         }
         s->edma_regs[(offset & 0x0F) / 4] = value;
-    }
-    if (0x40210000 <= offset && offset < 0x40210020) {
+    } else if (0x40210000 <= offset && offset < 0x40210020) {
         switch (offset & 0xFF) {
             case A_CH0_CSR:
                 if (value & (R_CH0_CSR_EBW_MASK || R_CH0_CSR_EEI_MASK || R_CH0_CSR_EARQ_MASK || R_CH0_CSR_ERQ_MASK)) {
@@ -155,13 +172,41 @@ static void s32k358_dma_write(void *opaque, hwaddr offset, uint64_t value, unsig
                 s->chn[0][offset & 0xFF] = value;
         }
     } else {
-        switch ((offset & 0xFF) - 0x20) {
+        switch (offset & 0xFF) {
+            case A_TCD0_SADDR:
+                s->saddr = value;
+                break;
+            case A_TCD0_SOFF:
+                s->soff = value;
+                break;
+            case A_TCD0_ATTR:
+                s->dsize = (value & R_TCD0_ATTR_DSIZE_MASK);
+                s->dmod = (value & R_TCD0_ATTR_DMOD_MASK) >> R_TCD0_ATTR_DMOD_SHIFT;
+                s->ssize = (value & R_TCD0_ATTR_SSIZE_MASK) >> R_TCD0_ATTR_SSIZE_SHIFT;
+                s->smod = (value & R_TCD0_ATTR_SMOD_MASK) >> R_TCD0_ATTR_SMOD_SHIFT;
+                break;
+            case A_TCD0_MLOFF:
+                s->nbytes = value & R_TCD0_MLOFF_NBYTES_MASK;
+                break;
+            case A_TCD0_SLAST:
+                s->slast = value;
+                break;
+            case A_TCD0_DADDR:
+                s->daddr = value;
+                break;
+            case A_TCD0_DOFF:
+                s->doff = value;
+                break;
+            case A_TCD0_DLAST_SGA:
+                s->dlast = value;
+                break;
             case A_TCD0_CSR:
-                if (value & R_TCD0_CSR_START_MASK)
+                s->intmajor = value & 2;
+                if (value & 1)
                     s32k358_dma_run(s);
-            /* fallthrough */
+                break;
             default:
-                s->tcd[0][(offset & 0xFF) - 0x20] = value;
+                qemu_log_mask(LOG_GUEST_ERROR, "DMA: Read from unimplemented channel or arbitration group: 0x%02lx\n", offset);
         }
     }
 }
@@ -170,6 +215,10 @@ static const MemoryRegionOps s32k358_dma_ops = {
     .read = s32k358_dma_read,
     .write = s32k358_dma_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = {
+        .min_access_size = 2,
+        .max_access_size = 4,
+    },
 };
 
 static void s32k358_dma_realize(DeviceState *dev, Error **errp) {
