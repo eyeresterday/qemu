@@ -7,5 +7,6 @@
             -kernel ~/debian-home/nxp/FreeRTOS_Toggle_Led_Example_S32K358/Debug_FLASH/FreeRTOS_Toggle_Led_Example_S32K358.elf \
             -machine s32k3x8evb \
             -serial mon:stdio \
-            -nographic
+            -nographic \
+            -s -S
 

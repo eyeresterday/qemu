@@ -38,15 +38,22 @@ static void s32k358_dma_run(S32K358DMAState *s) {
     uint32_t dlast = s->dlast;
     hwaddr soff = s->soff;
     hwaddr doff = s->doff;
+    hwaddr dupper;
+    hwaddr supper;
+    hwaddr dlower;
+    hwaddr slower;
     uint32_t int_flag = s->intmajor;
     uint32_t nbytes = s->nbytes;
     int readc = 0;
     uint64_t sbuf;
     /* Multibyte writes/reads are unimplemented */
-    if (!smod)
-        smod = 0xFFFFFFFF;
-    if (!dmod)
-        dmod = 0xFFFFFFFF;
+    smod = smod ? (1 << smod) - 1 : 0xFFFFFFFF;
+    dmod = dmod ? (1 << dmod) - 1 : 0xFFFFFFFF;;
+    supper = saddr & ~smod;
+    slower = saddr & smod;
+    dupper = daddr & ~dmod;
+    dlower = daddr & dmod;
+
 
     for (size_t i = 0; i < nbytes; i++) {
         uint64_t readval = 0;
@@ -60,15 +67,18 @@ static void s32k358_dma_run(S32K358DMAState *s) {
                 sbuf >>= (8 << dsize);
             }
         }
-        saddr += soff;
-        daddr += doff;
+        slower = (slower + soff) & smod;
+        dlower = (dlower + doff) & dmod;
+        saddr = supper | slower;
+        daddr = dupper | dlower;
     }
     s->saddr = saddr + slast;
     s->daddr = daddr + dlast;
     if (int_flag) {
+        //qemu_log_mask(LOG_GUEST_ERROR, "DMA: IRQ not yet implemented:");
         s->chn[0][R_CH0_INT] |= 1;
         s->edma_regs[R_DMA_INT] |= 1;
-        //qemu_set_irq(s->irq, 1);
+        qemu_set_irq(s->irq, 1);
     }
 }
 
@@ -116,7 +126,7 @@ static uint64_t s32k358_dma_read(void *opaque, hwaddr offset, unsigned size) {
             case A_TCD0_DLAST_SGA:
                 return s->dlast;
             case A_TCD0_CSR:
-                return s->intmajor << 1;
+                return s->intmajor;
             default:
                 qemu_log_mask(LOG_GUEST_ERROR, "DMA: Read from unimplemented channel or arbitration group: 0x%02lx\n", offset);
                 return 0;
